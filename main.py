@@ -40,6 +40,35 @@ LANG_CODES: dict[str, str] = {
     "ruso":      "ru",
 }
 
+# Todos los códigos conocidos para detectar sufijos existentes en el nombre
+_ALL_LANG_CODES = set(LANG_CODES.values())
+
+
+def build_output_filename(original_filename: str, target_lang: str) -> str:
+    """
+    Construye el nombre del archivo traducido.
+    - Si el stem termina en _XX o .XX (código de idioma conocido), lo reemplaza.
+      Ej: dino_en.srt  → dino_es.srt
+      Ej: movie.en.srt → movie.es.srt
+    - Si no tiene sufijo de idioma, lo agrega con punto.
+      Ej: pelicula.srt → pelicula.es.srt
+    """
+    lang_code = LANG_CODES.get(target_lang.lower(), target_lang.lower()[:2])
+    stem = Path(original_filename).stem   # "dino_en" de "dino_en.srt"
+
+    # Detectar sufijo _XX o .XX al final del stem
+    match = re.search(r"([_\.])([a-z]{2,3})$", stem, re.IGNORECASE)
+    if match and match.group(2).lower() in _ALL_LANG_CODES:
+        # Reemplazar código existente manteniendo el separador original
+        separator = match.group(1)
+        base = stem[: match.start()]
+        new_stem = f"{base}{separator}{lang_code}"
+    else:
+        # Sin sufijo de idioma: agregar .XX
+        new_stem = f"{stem}.{lang_code}"
+
+    return f"{new_stem}.srt"
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -333,10 +362,7 @@ async def start_translation(
 
     job_id = str(uuid.uuid4())[:8]
 
-    # Construir nombre de salida: nombre_original.{codigo_idioma}.srt
-    lang_code = LANG_CODES.get(target_lang.lower(), target_lang.lower()[:2])
-    stem = Path(file.filename).stem          # "pelicula" de "pelicula.srt"
-    output_filename = f"{stem}.{lang_code}.srt"
+    output_filename = build_output_filename(file.filename, target_lang)
 
     # Guardar SRT original y metadatos del job
     (JOBS_DIR / f"{job_id}_original.srt").write_text(content, encoding="utf-8")

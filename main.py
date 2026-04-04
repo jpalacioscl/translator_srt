@@ -167,7 +167,10 @@ async def translate_srt_stream(
     result_file = JOBS_DIR / f"{job_id}.srt"
 
     total = len(subtitles)
-    translated_subtitles = [sub.copy() for sub in subtitles]
+    translated_subtitles = [
+        srt.Subtitle(index=sub.index, start=sub.start, end=sub.end, content=sub.content)
+        for sub in subtitles
+    ]
     translated_map = {sub.index: sub for sub in translated_subtitles}
 
     def emit(event_type: str, data: dict) -> None:

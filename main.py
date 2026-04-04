@@ -25,6 +25,21 @@ MAX_RETRIES = 3
 JOBS_DIR = Path("/tmp/srt_translator_jobs")
 JOBS_DIR.mkdir(exist_ok=True)
 
+# Mapa de nombre de idioma → código ISO 639-1
+LANG_CODES: dict[str, str] = {
+    "español":   "es",
+    "inglés":    "en",
+    "francés":   "fr",
+    "alemán":    "de",
+    "italiano":  "it",
+    "portugués": "pt",
+    "chino":     "zh",
+    "japonés":   "ja",
+    "árabe":     "ar",
+    "coreano":   "ko",
+    "ruso":      "ru",
+}
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -318,9 +333,17 @@ async def start_translation(
 
     job_id = str(uuid.uuid4())[:8]
 
-    # Guardar SRT original para referencia
-    original_file = JOBS_DIR / f"{job_id}_original.srt"
-    original_file.write_text(content, encoding="utf-8")
+    # Construir nombre de salida: nombre_original.{codigo_idioma}.srt
+    lang_code = LANG_CODES.get(target_lang.lower(), target_lang.lower()[:2])
+    stem = Path(file.filename).stem          # "pelicula" de "pelicula.srt"
+    output_filename = f"{stem}.{lang_code}.srt"
+
+    # Guardar SRT original y metadatos del job
+    (JOBS_DIR / f"{job_id}_original.srt").write_text(content, encoding="utf-8")
+    (JOBS_DIR / f"{job_id}_meta.json").write_text(
+        json.dumps({"output_filename": output_filename, "target_lang": target_lang}),
+        encoding="utf-8",
+    )
 
     # Iniciar traducción en background
     asyncio.create_task(
@@ -331,6 +354,7 @@ async def start_translation(
         "job_id": job_id,
         "total_subtitles": len(subtitles),
         "filename": file.filename,
+        "output_filename": output_filename,
     }
 
 
@@ -374,15 +398,23 @@ async def stream_progress(job_id: str):
 
 @app.get("/api/download/{job_id}")
 async def download_result(job_id: str):
-    """Descarga el archivo SRT traducido."""
+    """Descarga el archivo SRT traducido con el nombre original + código de idioma."""
     result_file = JOBS_DIR / f"{job_id}.srt"
     if not result_file.exists():
         raise HTTPException(404, "Resultado no encontrado o traducción aún en proceso")
+
+    meta_file = JOBS_DIR / f"{job_id}_meta.json"
+    if meta_file.exists():
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        output_filename = meta.get("output_filename", f"subtitulo_{job_id}.srt")
+    else:
+        output_filename = f"subtitulo_{job_id}.srt"
+
     return FileResponse(
         str(result_file),
         media_type="text/plain",
-        filename=f"traducido_{job_id}.srt",
-        headers={"Content-Disposition": f'attachment; filename="traducido_{job_id}.srt"'},
+        filename=output_filename,
+        headers={"Content-Disposition": f'attachment; filename="{output_filename}"'},
     )
 
 

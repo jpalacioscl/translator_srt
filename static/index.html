@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Traductor SRT — IA Local</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-inner">
+        <div class="logo">
+          <span class="logo-icon">🎬</span>
+          <div>
+            <h1>Traductor SRT</h1>
+            <p>IA 100% local · Powered by Ollama + llama.cpp</p>
+          </div>
+        </div>
+        <div id="ollamaStatus" class="status-badge status-checking">
+          <span class="dot"></span> Verificando Ollama…
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <!-- Panel de configuración -->
+      <section class="card config-card">
+        <h2 class="section-title">Configuración</h2>
+        <div class="config-grid">
+          <div class="form-group">
+            <label for="modelSelect">Modelo IA</label>
+            <select id="modelSelect">
+              <option value="">Cargando modelos…</option>
+            </select>
+            <span class="hint">Recomendado: qwen3:8b</span>
+          </div>
+          <div class="form-group">
+            <label for="sourceLang">Idioma origen</label>
+            <select id="sourceLang">
+              <option value="inglés">Inglés</option>
+              <option value="francés">Francés</option>
+              <option value="alemán">Alemán</option>
+              <option value="italiano">Italiano</option>
+              <option value="portugués">Portugués</option>
+              <option value="japonés">Japonés</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="targetLang">Idioma destino</label>
+            <select id="targetLang">
+              <option value="español">Español</option>
+              <option value="inglés">Inglés</option>
+              <option value="francés">Francés</option>
+              <option value="alemán">Alemán</option>
+              <option value="italiano">Italiano</option>
+              <option value="portugués">Portugués</option>
+              <option value="chino">Chino (Mandarín)</option>
+              <option value="japonés">Japonés</option>
+              <option value="árabe">Árabe</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Zona de upload -->
+      <section class="card upload-card">
+        <h2 class="section-title">Archivo de subtítulos</h2>
+        <div class="drop-zone" id="dropZone">
+          <div class="drop-icon">📄</div>
+          <p class="drop-text">Arrastra tu archivo <strong>.srt</strong> aquí</p>
+          <p class="drop-subtext">o haz clic para seleccionar</p>
+          <input type="file" id="fileInput" accept=".srt" hidden />
+        </div>
+        <div id="fileInfo" class="file-info hidden">
+          <span class="file-icon">✅</span>
+          <div>
+            <strong id="fileName"></strong>
+            <span id="fileSize" class="file-meta"></span>
+          </div>
+          <button class="btn-clear" id="clearFile" title="Quitar archivo">✕</button>
+        </div>
+        <button class="btn-primary" id="translateBtn" disabled>
+          <span class="btn-icon">⚡</span> Traducir con IA
+        </button>
+      </section>
+
+      <!-- Progreso -->
+      <section class="card progress-card hidden" id="progressCard">
+        <h2 class="section-title">Traduciendo…</h2>
+        <div class="progress-meta">
+          <span id="progressLabel">Iniciando…</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-bar-track">
+          <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-details">
+          <span id="progressBatch"></span>
+          <span id="progressEta"></span>
+        </div>
+        <div class="sample-box" id="sampleBox">
+          <span class="sample-label">Última línea:</span>
+          <span id="sampleText"></span>
+        </div>
+        <div id="warningList" class="warning-list"></div>
+      </section>
+
+      <!-- Resultado -->
+      <section class="card result-card hidden" id="resultCard">
+        <h2 class="section-title">Traducción completa</h2>
+        <div class="result-actions">
+          <button class="btn-primary" id="downloadBtn">
+            ⬇ Descargar SRT traducido
+          </button>
+          <button class="btn-secondary" id="previewBtn">
+            👁 Ver comparativa
+          </button>
+          <button class="btn-ghost" id="newTranslationBtn">
+            🔄 Nueva traducción
+          </button>
+        </div>
+      </section>
+
+      <!-- Vista previa comparativa -->
+      <section class="card preview-card hidden" id="previewCard">
+        <div class="preview-header">
+          <h2 class="section-title">Comparativa (primeras 50 líneas)</h2>
+          <button class="btn-ghost" id="closePreview">✕ Cerrar</button>
+        </div>
+        <div class="preview-table-wrap">
+          <table class="preview-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Tiempo</th>
+                <th>Original</th>
+                <th>Traducción</th>
+              </tr>
+            </thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      Traducción 100% local · Sin enviar datos a la nube · GPU RTX 5060
+    </footer>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

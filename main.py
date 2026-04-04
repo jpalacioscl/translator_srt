@@ -100,6 +100,7 @@ REGLAS ESTRICTAS:
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
+        "think": False,   # Desactiva thinking en qwen3/deepseek-r1 (Ollama >= 0.6)
         "options": {
             "temperature": 0.1,   # Baja temperatura = más consistente
             "top_p": 0.9,
@@ -114,7 +115,10 @@ REGLAS ESTRICTAS:
     )
     response.raise_for_status()
     data = response.json()
-    return data["message"]["content"].strip()
+    raw = data["message"]["content"].strip()
+    # Eliminar bloques <think>...</think> por si el modelo los incluye igualmente
+    raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    return raw
 
 
 def build_text_block(subtitles: list[srt.Subtitle]) -> str:

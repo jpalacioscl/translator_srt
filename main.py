@@ -20,7 +20,8 @@ from fastapi.staticfiles import StaticFiles
 # Configuración
 # ---------------------------------------------------------------------------
 OLLAMA_BASE_URL = "http://localhost:11434"
-BATCH_SIZE = 8           # Líneas por lote (más pequeño = menos riesgo de truncamiento)
+BATCH_SIZE = 8           # Máximo de líneas por lote
+BATCH_MAX_CHARS = 600    # Máximo de caracteres totales por lote
 MAX_RETRIES = 3
 JOBS_DIR = Path("/tmp/srt_translator_jobs")
 JOBS_DIR.mkdir(exist_ok=True)
@@ -165,6 +166,27 @@ REGLAS ESTRICTAS:
     return raw
 
 
+def create_batches(subtitles: list[srt.Subtitle]) -> list[list[srt.Subtitle]]:
+    """Crea batches respetando límite de líneas Y de caracteres totales."""
+    batches = []
+    current: list[srt.Subtitle] = []
+    current_chars = 0
+
+    for sub in subtitles:
+        sub_chars = len(strip_html_tags(sub.content))
+        if current and (len(current) >= BATCH_SIZE or current_chars + sub_chars > BATCH_MAX_CHARS):
+            batches.append(current)
+            current = [sub]
+            current_chars = sub_chars
+        else:
+            current.append(sub)
+            current_chars += sub_chars
+
+    if current:
+        batches.append(current)
+    return batches
+
+
 def build_text_block(subtitles: list[srt.Subtitle]) -> str:
     """Crea un bloque numerado de texto para enviar al modelo."""
     lines = []
@@ -239,7 +261,7 @@ async def translate_srt_stream(
             return
 
         processed = 0
-        batches = [subtitles[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
+        batches = create_batches(subtitles)
 
         for batch_idx, batch in enumerate(batches):
             retries = 0

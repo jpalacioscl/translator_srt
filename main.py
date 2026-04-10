@@ -148,7 +148,7 @@ REGLAS ESTRICTAS:
         "options": {
             "temperature": 0.1,   # Baja temperatura = más consistente
             "top_p": 0.9,
-            "num_predict": 2048,
+            "num_predict": 4096,
         },
     }
 

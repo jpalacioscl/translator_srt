@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 # Configuración
 # ---------------------------------------------------------------------------
 OLLAMA_BASE_URL = "http://localhost:11434"
-BATCH_SIZE = 12          # Líneas por lote (contexto amplio = mejor traducción)
+BATCH_SIZE = 8           # Líneas por lote (más pequeño = menos riesgo de truncamiento)
 MAX_RETRIES = 3
 JOBS_DIR = Path("/tmp/srt_translator_jobs")
 JOBS_DIR.mkdir(exist_ok=True)
@@ -148,7 +148,7 @@ REGLAS ESTRICTAS:
         "options": {
             "temperature": 0.1,   # Baja temperatura = más consistente
             "top_p": 0.9,
-            "num_predict": 4096,
+            "num_predict": -1,    # Sin límite de tokens en la respuesta
         },
     }
 

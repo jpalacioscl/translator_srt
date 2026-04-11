@@ -204,8 +204,8 @@ def parse_translated_block(
     Es tolerante a variaciones de formato que el modelo pueda producir.
     """
     translations: dict[int, str] = {}
-    # Patron flexible: [N] texto  o  N. texto  o  N) texto
-    pattern = re.compile(r"^\s*[\[(\{]?(\d+)[\])\}]?[.\-\s]+(.+)$", re.MULTILINE)
+    # Patron flexible: [N] texto  o  N. texto  o  N) texto  o  [N]: texto
+    pattern = re.compile(r"^\s*[\[(\{]?(\d+)[\])\}]?[.:\-\s]+(.+?)\r?$", re.MULTILINE)
 
     for match in pattern.finditer(response):
         idx = int(match.group(1))

@@ -187,33 +187,40 @@ def create_batches(subtitles: list[srt.Subtitle]) -> list[list[srt.Subtitle]]:
     return batches
 
 
-def build_text_block(subtitles: list[srt.Subtitle]) -> str:
-    """Crea un bloque numerado de texto para enviar al modelo."""
+def build_text_block(subtitles: list[srt.Subtitle]) -> tuple[str, list[int]]:
+    """
+    Crea un bloque numerado de texto para enviar al modelo.
+    Usa numeración secuencial 1-N para evitar que el modelo renumere.
+    Retorna (texto, index_map) donde index_map[i-1] es el sub.index real.
+    """
     lines = []
-    for sub in subtitles:
+    index_map: list[int] = []
+    for i, sub in enumerate(subtitles, 1):
         clean = strip_html_tags(sub.content).replace("\n", " ").strip()
-        lines.append(f"[{sub.index}] {clean}")
-    return "\n".join(lines)
+        lines.append(f"[{i}] {clean}")
+        index_map.append(sub.index)
+    return "\n".join(lines), index_map
 
 
 def parse_translated_block(
-    response: str, original_subtitles: list[srt.Subtitle]
+    response: str, original_subtitles: list[srt.Subtitle], index_map: list[int]
 ) -> dict[int, str]:
     """
-    Parsea la respuesta del modelo y retorna {index: translated_text}.
+    Parsea la respuesta del modelo y retorna {sub_index_real: translated_text}.
+    Usa el index_map para convertir numeración secuencial 1-N al índice SRT real.
     Es tolerante a variaciones de formato que el modelo pueda producir.
     """
     translations: dict[int, str] = {}
     # Patron flexible: [N] texto  o  N. texto  o  N) texto  o  [N]: texto
     pattern = re.compile(r"^\s*[\[(\{]?(\d+)[\])\}]?[.:\-\s]+(.+?)\r?$", re.MULTILINE)
 
+    valid_seq = set(range(1, len(index_map) + 1))
     for match in pattern.finditer(response):
-        idx = int(match.group(1))
+        seq = int(match.group(1))
         text = match.group(2).strip()
-        # Verificar que el índice pertenece al batch actual
-        valid_indices = {s.index for s in original_subtitles}
-        if idx in valid_indices:
-            translations[idx] = text
+        if seq in valid_seq:
+            real_idx = index_map[seq - 1]
+            translations[real_idx] = text
 
     return translations
 
@@ -270,11 +277,11 @@ async def translate_srt_stream(
 
             while retries < MAX_RETRIES and not success:
                 try:
-                    text_block = build_text_block(current_batch)
+                    text_block, index_map = build_text_block(current_batch)
                     response_text = await ollama_translate(
                         client, model, text_block, source_lang, target_lang
                     )
-                    translations = parse_translated_block(response_text, current_batch)
+                    translations = parse_translated_block(response_text, current_batch, index_map)
 
                     # Verificar cobertura mínima (80% del batch)
                     coverage = len(translations) / len(current_batch)

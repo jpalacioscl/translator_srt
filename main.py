@@ -1,5 +1,5 @@
 """
-Traductor de subtítulos SRT con IA local (Ollama + llama.cpp)
+Traductor de subtítulos SRT con IA local (llama-server / llama.cpp)
 Backend FastAPI con streaming SSE para progreso en tiempo real.
 """
 import asyncio
@@ -19,8 +19,8 @@ from fastapi.staticfiles import StaticFiles
 # ---------------------------------------------------------------------------
 # Configuración
 # ---------------------------------------------------------------------------
-OLLAMA_BASE_URL = "http://localhost:11434"
-BATCH_SIZE = 8           # Máximo de líneas por lote
+LLAMACPP_BASE_URL = "http://localhost:8080"
+BATCH_SIZE = 3           # Máximo de líneas por lote
 BATCH_MAX_CHARS = 600    # Máximo de caracteres totales por lote
 MAX_RETRIES = 3
 JOBS_DIR = Path("/tmp/srt_translator_jobs")
@@ -112,15 +112,14 @@ def extract_html_wrapper(text: str) -> tuple[str, str]:
 # Cliente Ollama
 # ---------------------------------------------------------------------------
 
-async def ollama_translate(
+async def llamacpp_translate(
     client: httpx.AsyncClient,
-    model: str,
     text_block: str,
     source_lang: str,
     target_lang: str,
 ) -> str:
     """
-    Envía un bloque de texto numerado a Ollama para traducir.
+    Envía un bloque de texto numerado a llama-server para traducir.
     Retorna el bloque traducido en el mismo formato numerado.
     """
     system_prompt = f"""Eres un traductor profesional especializado en subtítulos de video.
@@ -134,34 +133,40 @@ REGLAS ESTRICTAS:
 5. Mantén el tono, registro y emoción del original.
 6. Los subtítulos son líneas breves de diálogo: usa lenguaje natural y coloquial.
 7. NO traduzcas los corchetes ni los números.
-8. Responde SOLO con las líneas numeradas traducidas, nada más."""
+8. Responde SOLO con las líneas numeradas traducidas, nada más.
+9. CRÍTICO: Si la entrada tiene N líneas numeradas, la salida debe tener EXACTAMENTE N líneas numeradas. NUNCA fusiones dos líneas de entrada en una sola de salida, aunque formen una misma oración. Cada [N] de entrada produce exactamente un [N] de salida."""
 
-    user_prompt = f"Traduce estas líneas de subtítulo:\n\n{text_block}"
+    user_prompt = (
+        "REGLA FUNDAMENTAL: cada [N] de entrada produce SIEMPRE exactamente un [N] de salida. "
+        "NUNCA combines dos líneas en una aunque formen una sola oración.\n\n"
+        "Ejemplo CORRECTO (líneas 1-2 forman una oración, línea 3 es nueva):\n"
+        "Entrada:\n[1] ground zero of the\n[2] Sex Pistols Anarchy in the UK.\n[3] Over time, punk has been\n"
+        "Salida:\n[1] tierra cero de los\n[2] Sex Pistols Anarchy in the UK.\n[3] Con el tiempo, el punk ha sido\n\n"
+        "Ejemplo CORRECTO (fragmento continuo en las 3 líneas):\n"
+        "Entrada:\n[1] the letters that get\n[2] themselves printed\n[3] are only the tip\n"
+        "Salida:\n[1] las cartas que\n[2] se imprimen\n[3] son solo la punta\n\n"
+        f"Ahora traduce estas líneas de subtítulo:\n\n{text_block}"
+    )
 
     payload = {
-        "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-        "think": False,   # Desactiva thinking en qwen3/deepseek-r1 (Ollama >= 0.6)
-        "options": {
-            "temperature": 0.1,   # Baja temperatura = más consistente
-            "top_p": 0.9,
-            "num_predict": -1,    # Sin límite de tokens en la respuesta
-        },
+        "temperature": 0.1,
+        "top_p": 0.9,
     }
 
     response = await client.post(
-        f"{OLLAMA_BASE_URL}/api/chat",
+        f"{LLAMACPP_BASE_URL}/v1/chat/completions",
         json=payload,
         timeout=120.0,
     )
     response.raise_for_status()
     data = response.json()
-    raw = data["message"]["content"].strip()
-    # Eliminar bloques <think>...</think> por si el modelo los incluye igualmente
+    raw = data["choices"][0]["message"]["content"].strip()
+    # Eliminar bloques <think>...</think> que algunos modelos generan
     raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
     return raw
 
@@ -258,12 +263,12 @@ async def translate_srt_stream(
     emit("start", {"total": total, "model": model, "target_lang": target_lang})
 
     async with httpx.AsyncClient() as client:
-        # Verificar que Ollama está disponible
+        # Verificar que llama-server está disponible
         try:
-            resp = await client.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5.0)
+            resp = await client.get(f"{LLAMACPP_BASE_URL}/health", timeout=5.0)
             resp.raise_for_status()
         except Exception:
-            emit("error", {"message": "Ollama no está disponible. Ejecuta: ollama serve"})
+            emit("error", {"message": "llama-server no está disponible. Ejecuta: ./run.sh"})
             emit("done", {"success": False})
             return
 
@@ -278,17 +283,34 @@ async def translate_srt_stream(
             while retries < MAX_RETRIES and not success:
                 try:
                     text_block, index_map = build_text_block(current_batch)
-                    response_text = await ollama_translate(
-                        client, model, text_block, source_lang, target_lang
+                    response_text = await llamacpp_translate(
+                        client, text_block, source_lang, target_lang
                     )
                     translations = parse_translated_block(response_text, current_batch, index_map)
 
-                    # Verificar cobertura mínima (80% del batch)
+                    # Reintentar líneas faltantes de forma individual (evita fusiones)
+                    if len(translations) < len(current_batch):
+                        missing_subs = [s for s in current_batch if s.index not in translations]
+                        for missing_sub in missing_subs:
+                            try:
+                                single_block, single_map = build_text_block([missing_sub])
+                                single_resp = await llamacpp_translate(
+                                    client, single_block, source_lang, target_lang
+                                )
+                                single_trans = parse_translated_block(
+                                    single_resp, [missing_sub], single_map
+                                )
+                                translations.update(single_trans)
+                            except Exception:
+                                pass  # Original preserved
+
                     coverage = len(translations) / len(current_batch)
-                    if coverage < 0.8 and retries < MAX_RETRIES - 1:
-                        raise ValueError(
-                            f"Cobertura insuficiente: {coverage:.0%} ({len(translations)}/{len(current_batch)})"
-                        )
+                    if coverage < 0.8:
+                        emit("warning", {
+                            "message": f"Batch {batch_idx + 1}: cobertura {coverage:.0%} "
+                                       f"({len(translations)}/{len(current_batch)}), "
+                                       "líneas faltantes conservadas en original."
+                        })
 
                     # Aplicar traducciones
                     for sub in current_batch:
@@ -352,16 +374,16 @@ async def root():
 
 @app.get("/api/models")
 async def get_models():
-    """Obtiene la lista de modelos disponibles en Ollama."""
+    """Obtiene el modelo cargado en llama-server."""
     async with httpx.AsyncClient() as client:
         try:
-            resp = await client.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5.0)
+            resp = await client.get(f"{LLAMACPP_BASE_URL}/v1/models", timeout=5.0)
             resp.raise_for_status()
             data = resp.json()
-            models = [m["name"] for m in data.get("models", [])]
-            return {"models": models, "ollama_available": True}
+            models = [m["id"] for m in data.get("data", [])]
+            return {"models": models, "llamacpp_available": True}
         except Exception:
-            return {"models": [], "ollama_available": False}
+            return {"models": [], "llamacpp_available": False}
 
 
 @app.post("/api/translate")

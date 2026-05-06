@@ -11,7 +11,7 @@ let selectedFile = null;
 let startTime = null;
 
 // ─── Referencias DOM ────────────────────────────────────────────────────────
-const ollamaStatus   = document.getElementById("ollamaStatus");
+const ollamaStatus   = document.getElementById("llamacppStatus");
 const modelSelect    = document.getElementById("modelSelect");
 const sourceLang     = document.getElementById("sourceLang");
 const targetLang     = document.getElementById("targetLang");
@@ -40,22 +40,22 @@ const closePreview   = document.getElementById("closePreview");
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 (async () => {
-  await checkOllama();
+  await checkLlamaCpp();
 })();
 
-// ─── Verificar Ollama ────────────────────────────────────────────────────────
-async function checkOllama() {
+// ─── Verificar llama-server ──────────────────────────────────────────────────
+async function checkLlamaCpp() {
   try {
     const res = await fetch(`${API}/api/models`);
     const data = await res.json();
 
-    if (data.ollama_available && data.models.length > 0) {
-      setStatus("ok", `Ollama listo · ${data.models.length} modelos`);
+    if (data.llamacpp_available && data.models.length > 0) {
+      setStatus("ok", `llama-server listo · ${data.models.length} modelo(s)`);
       populateModels(data.models);
-    } else if (data.ollama_available) {
-      setStatus("warning", "Ollama disponible pero sin modelos");
+    } else if (data.llamacpp_available) {
+      setStatus("warning", "llama-server disponible pero sin modelo cargado");
     } else {
-      setStatus("error", "Ollama no disponible · ejecuta: ollama serve");
+      setStatus("error", "llama-server no disponible · ejecuta: ./run.sh");
     }
   } catch {
     setStatus("error", "No se puede conectar al backend");
@@ -69,20 +69,10 @@ function setStatus(type, text) {
 
 function populateModels(models) {
   modelSelect.innerHTML = "";
-  const preferred = ["qwen3:8b", "qwen2.5:7b", "llama3.2:3b"];
-  const sorted = [...models].sort((a, b) => {
-    const ai = preferred.indexOf(a), bi = preferred.indexOf(b);
-    if (ai !== -1 && bi !== -1) return ai - bi;
-    if (ai !== -1) return -1;
-    if (bi !== -1) return 1;
-    return a.localeCompare(b);
-  });
-
-  sorted.forEach(m => {
+  models.forEach(m => {
     const opt = document.createElement("option");
     opt.value = m;
-    opt.textContent = m;
-    if (m === "qwen3:8b") opt.textContent += " ★ recomendado";
+    opt.textContent = m.replace(/^.*[\\/]/, "");  // mostrar solo el nombre de archivo
     modelSelect.appendChild(opt);
   });
 }
@@ -158,7 +148,7 @@ async function startTranslation() {
   progressCard.classList.remove("hidden");
   warningList.innerHTML = "";
   sampleText.textContent = "";
-  setProgress(0, "Conectando con Ollama…", "", "");
+  setProgress(0, "Conectando con llama-server…", "", "");
   startTime = Date.now();
 
   const formData = new FormData();

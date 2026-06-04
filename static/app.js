@@ -210,6 +210,7 @@ function listenProgress(jobId, total) {
     if (msg.type === "error") {
       es.close();
       alert(`Error durante la traducción: ${msg.data.message}`);
+      progressCard.classList.add("hidden");
       resetTranslateBtn();
     }
 

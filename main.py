@@ -418,7 +418,11 @@ async def start_translation(
     # Guardar SRT original y metadatos del job
     (JOBS_DIR / f"{job_id}_original.srt").write_text(content, encoding="utf-8")
     (JOBS_DIR / f"{job_id}_meta.json").write_text(
-        json.dumps({"output_filename": output_filename, "target_lang": target_lang}),
+        json.dumps({
+            "output_filename": output_filename,
+            "target_lang": target_lang,
+            "total_subtitles": len(subtitles),
+        }),
         encoding="utf-8",
     )
 
@@ -439,7 +443,17 @@ async def start_translation(
 async def stream_progress(job_id: str):
     """Server-Sent Events: devuelve el progreso de traducción en tiempo real."""
     queue_file = JOBS_DIR / f"{job_id}.jsonl"
-    timeout = 600  # 10 minutos máximo
+
+    # Timeout dinámico: 30s por subtítulo (mínimo 10 min, máximo 6 h)
+    meta_file = JOBS_DIR / f"{job_id}_meta.json"
+    total_subtitles = 500  # fallback
+    if meta_file.exists():
+        try:
+            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            total_subtitles = meta.get("total_subtitles", total_subtitles)
+        except Exception:
+            pass
+    timeout = max(600, min(total_subtitles * 30, 21600))
 
     async def event_generator() -> AsyncGenerator[str, None]:
         start = time.time()

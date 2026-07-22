@@ -4,6 +4,7 @@ Backend FastAPI con streaming SSE para progreso en tiempo real.
 """
 import asyncio
 import json
+import logging
 import re
 import time
 import uuid
@@ -25,6 +26,19 @@ BATCH_MAX_CHARS = 600    # Máximo de caracteres totales por lote
 MAX_RETRIES = 3
 JOBS_DIR = Path("/tmp/srt_translator_jobs")
 JOBS_DIR.mkdir(exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(JOBS_DIR / "app.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("srt_translator")
 
 # Mapa de nombre de idioma → código ISO 639-1
 LANG_CODES: dict[str, str] = {
@@ -103,9 +117,12 @@ def strip_html_tags(text: str) -> str:
 
 def extract_html_wrapper(text: str) -> tuple[str, str]:
     """Retorna (prefix_tags, suffix_tags) que envuelven el texto."""
-    prefix = re.findall(r"^(<[^>]+>)+", text)
-    suffix = re.findall(r"(<[^>]+>)+$", text)
-    return ("".join(prefix), "".join(suffix))
+    prefix_match = re.match(r"^(?:<[^>]+>)+", text)
+    suffix_match = re.search(r"(?:<[^>]+>)+$", text)
+    return (
+        prefix_match.group(0) if prefix_match else "",
+        suffix_match.group(0) if suffix_match else "",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +277,8 @@ async def translate_srt_stream(
         with open(queue_file, "a", encoding="utf-8") as f:
             f.write(json.dumps({"type": event_type, "data": data}) + "\n")
 
+    logger.info("[%s] Iniciando traducción: %d subtítulos, modelo=%s, %s->%s",
+                job_id, total, model, source_lang, target_lang)
     emit("start", {"total": total, "model": model, "target_lang": target_lang})
 
     async with httpx.AsyncClient() as client:
@@ -267,7 +286,8 @@ async def translate_srt_stream(
         try:
             resp = await client.get(f"{LLAMACPP_BASE_URL}/health", timeout=5.0)
             resp.raise_for_status()
-        except Exception:
+        except Exception as e:
+            logger.error("[%s] llama-server no disponible: %s", job_id, e)
             emit("error", {"message": "llama-server no está disponible. Ejecuta: ./run.sh"})
             emit("done", {"success": False})
             return
@@ -301,11 +321,19 @@ async def translate_srt_stream(
                                     single_resp, [missing_sub], single_map
                                 )
                                 translations.update(single_trans)
-                            except Exception:
-                                pass  # Original preserved
+                            except Exception as e:
+                                logger.debug(
+                                    "[%s] Reintento individual falló para sub %d: %s",
+                                    job_id, missing_sub.index, e,
+                                )  # Original preserved
 
                     coverage = len(translations) / len(current_batch)
                     if coverage < 0.8:
+                        logger.warning(
+                            "[%s] Batch %d: cobertura baja %.0f%% (%d/%d)",
+                            job_id, batch_idx + 1, coverage * 100,
+                            len(translations), len(current_batch),
+                        )
                         emit("warning", {
                             "message": f"Batch {batch_idx + 1}: cobertura {coverage:.0%} "
                                        f"({len(translations)}/{len(current_batch)}), "
@@ -336,6 +364,10 @@ async def translate_srt_stream(
                 except Exception as e:
                     retries += 1
                     if retries < MAX_RETRIES:
+                        logger.warning(
+                            "[%s] Batch %d intento %d/%d falló: %s",
+                            job_id, batch_idx + 1, retries, MAX_RETRIES, e,
+                        )
                         emit("warning", {
                             "message": f"Reintentando batch {batch_idx + 1} (intento {retries}/{MAX_RETRIES}): {str(e)[:100]}"
                         })
@@ -344,6 +376,10 @@ async def translate_srt_stream(
                             current_batch = current_batch[: len(current_batch) // 2]
                         await asyncio.sleep(1)
                     else:
+                        logger.error(
+                            "[%s] Batch %d falló tras %d intentos: %s",
+                            job_id, batch_idx + 1, MAX_RETRIES, e,
+                        )
                         emit("warning", {
                             "message": f"Batch {batch_idx + 1} falló tras {MAX_RETRIES} intentos. Se mantiene texto original."
                         })
@@ -360,6 +396,7 @@ async def translate_srt_stream(
     # Guardar resultado final
     result_srt = subtitles_to_srt(list(translated_map.values()))
     result_file.write_text(result_srt, encoding="utf-8")
+    logger.info("[%s] Traducción completa: %s", job_id, result_file)
     emit("done", {"success": True, "job_id": job_id})
 
 
@@ -382,7 +419,8 @@ async def get_models():
             data = resp.json()
             models = [m["id"] for m in data.get("data", [])]
             return {"models": models, "llamacpp_available": True}
-        except Exception:
+        except Exception as e:
+            logger.warning("No se pudo conectar a llama-server en /api/models: %s", e)
             return {"models": [], "llamacpp_available": False}
 
 
@@ -395,6 +433,7 @@ async def start_translation(
 ):
     """Inicia un job de traducción y retorna el job_id."""
     if not file.filename.lower().endswith(".srt"):
+        logger.warning("Archivo rechazado (extensión no .srt): %s", file.filename)
         raise HTTPException(400, "Solo se aceptan archivos .srt")
 
     content_bytes = await file.read()
@@ -406,9 +445,11 @@ async def start_translation(
     try:
         subtitles = parse_srt(content)
     except ValueError as e:
+        logger.warning("SRT inválido en %s: %s", file.filename, e)
         raise HTTPException(400, str(e))
 
     if not subtitles:
+        logger.warning("SRT sin subtítulos válidos: %s", file.filename)
         raise HTTPException(400, "El archivo SRT no contiene subtítulos válidos")
 
     job_id = str(uuid.uuid4())[:8]
@@ -425,6 +466,9 @@ async def start_translation(
         }),
         encoding="utf-8",
     )
+
+    logger.info("Job %s creado: %s -> %s (%d subtítulos)",
+                job_id, file.filename, output_filename, len(subtitles))
 
     # Iniciar traducción en background
     asyncio.create_task(
@@ -475,6 +519,7 @@ async def stream_progress(job_id: str):
                 await asyncio.sleep(0.3)
 
         if not done:
+            logger.error("[%s] Timeout esperando traducción tras %ds", job_id, timeout)
             yield f"data: {json.dumps({'type': 'error', 'data': {'message': 'Timeout: la traducción tardó demasiado'}})}\n\n"
 
     return StreamingResponse(
